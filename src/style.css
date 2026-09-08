@@ -1,0 +1,76 @@
+:root {
+  color-scheme: dark;
+  --ink: #0a0c10;
+  --label: #f3e6d0;
+  --mark: rgba(243, 230, 208, 0.34);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  font-family: Outfit, system-ui, sans-serif;
+  cursor: grab;
+}
+
+body:active {
+  cursor: grabbing;
+}
+
+#map {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.country-label {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  color: var(--label);
+  font-family: "Cormorant Garamond", "Times New Roman", serif;
+  font-size: clamp(1.05rem, 1.8vw, 1.55rem);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  text-shadow: 0 1px 16px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.country-label.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.mark {
+  position: fixed;
+  left: max(1.25rem, env(safe-area-inset-left));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 2;
+  margin: 0;
+  color: var(--mark);
+  font-size: 0.68rem;
+  font-weight: 300;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  pointer-events: none;
+  user-select: none;
+}

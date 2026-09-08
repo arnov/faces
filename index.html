@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Faces</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400&family=Outfit:wght@300;400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="map" aria-label="Zoomable world map of faces"></canvas>
+    <div id="label" class="country-label" hidden></div>
+    <p class="mark">Faces</p>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <script src="./countries.js"></script>
+    <script src="./geo/countries-50m.js"></script>
+    <script src="./geo/kosovo.js"></script>
+    <script src="./geo/tuvalu.js"></script>
+    <script src="./geo/face-sites.js"></script>
+    <script src="./src/iso.js"></script>
+    <script src="./src/portraits.js"></script>
+    <script src="./src/map.js"></script>
+    <script src="./src/main.js"></script>
+  </body>
+</html>
