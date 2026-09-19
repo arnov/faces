@@ -2,7 +2,7 @@
   color-scheme: dark;
   --ink: #0a0c10;
   --label: #f3e6d0;
-  --mark: rgba(243, 230, 208, 0.34);
+  --mark: rgba(243, 230, 208, 0.72);
 }
 
 *,
@@ -26,6 +26,13 @@ body:active {
   cursor: grabbing;
 }
 
+.stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  transition: filter 220ms ease;
+}
+
 #map {
   display: block;
   width: 100%;
@@ -33,8 +40,27 @@ body:active {
   touch-action: none;
 }
 
-.country-label {
+body.is-info {
+  cursor: default;
+}
+
+body.is-info:active {
+  cursor: default;
+}
+
+body.is-info .stage {
+  filter: blur(12px);
+}
+
+.hud {
   position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.country-label {
+  position: absolute;
   top: 0;
   left: 0;
   z-index: 2;
@@ -60,17 +86,82 @@ body:active {
   transform: translate3d(0, 0, 0);
 }
 
-.mark {
-  position: fixed;
-  left: max(1.25rem, env(safe-area-inset-left));
-  bottom: max(1rem, env(safe-area-inset-bottom));
+.brand {
+  position: absolute;
+  left: max(2.25rem, calc(env(safe-area-inset-left) + 1.25rem));
+  bottom: max(1.15rem, env(safe-area-inset-bottom));
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.mark {
   margin: 0;
   color: var(--mark);
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   font-weight: 300;
   letter-spacing: 0.34em;
   text-transform: uppercase;
   pointer-events: none;
   user-select: none;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.65);
+}
+
+.info-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mark);
+  cursor: pointer;
+  filter: drop-shadow(0 1px 8px rgba(0, 0, 0, 0.7));
+}
+
+.info-toggle:hover,
+.info-toggle[aria-expanded="true"] {
+  color: var(--label);
+}
+
+.info {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(2rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+    max(2rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+  background: rgba(10, 12, 16, 0.42);
+  cursor: default;
+}
+
+.info[hidden] {
+  display: none;
+}
+
+.info-panel {
+  max-width: 34rem;
+  color: var(--label);
+  font-family: "Cormorant Garamond", "Times New Roman", serif;
+  font-size: clamp(1.05rem, 2.1vw, 1.35rem);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  text-shadow: 0 1px 16px rgba(0, 0, 0, 0.45);
+}
+
+.info-panel p {
+  margin: 0 0 1.1em;
+}
+
+.info-panel p:last-child {
+  margin-bottom: 0;
 }

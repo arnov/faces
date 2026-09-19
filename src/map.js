@@ -16,7 +16,8 @@ const SIZE_CURVE = 0.25;
 const SIZE_MIN = 0.42;
 const SIZE_MAX = 1.85;
 const FIT_FILL = 1.35;
-const FACE_SCALE = { NL: 0.78 };
+const FACE_SCALE = { NL: 0.78, MA: 0.82 };
+const FACE_SITE_SCALE = { PS: [1, 0.26] };
 
 function pointer(event, target) {
   const rect = target.getBoundingClientRect();
@@ -124,6 +125,83 @@ function padNumeric(id) {
   return String(id ?? "").padStart(3, "0");
 }
 
+const WS_NORTH = 27.667;
+
+function intersectLat(a, b, lat) {
+  const t = (lat - a[1]) / ((b[1] - a[1]) || 1e-12);
+  return [a[0] + (b[0] - a[0]) * t, lat];
+}
+
+function clipRingLat(ring, lat, keepNorth) {
+  if (!ring.length) {
+    return ring;
+  }
+  const inside = (point) => (keepNorth ? point[1] >= lat : point[1] <= lat);
+  const out = [];
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const a = ring[i];
+    const b = ring[i + 1];
+    const aIn = inside(a);
+    const bIn = inside(b);
+    if (aIn && bIn) {
+      out.push(b);
+    } else if (aIn && !bIn) {
+      out.push(intersectLat(a, b, lat));
+    } else if (!aIn && bIn) {
+      out.push(intersectLat(a, b, lat), b);
+    }
+  }
+  if (out.length < 3) {
+    return [];
+  }
+  const first = out[0];
+  const last = out[out.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    out.push(first);
+  }
+  return out;
+}
+
+function featurePolys(feature) {
+  const geom = feature.geometry;
+  return geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+}
+
+function clipFeatureLat(feature, lat, keepNorth) {
+  const clipped = [];
+  for (const poly of featurePolys(feature)) {
+    const outer = clipRingLat(poly[0], lat, keepNorth);
+    if (outer.length < 4) {
+      continue;
+    }
+    const holes = poly
+      .slice(1)
+      .map((ring) => clipRingLat(ring, lat, keepNorth))
+      .filter((ring) => ring.length >= 4);
+    clipped.push([outer, ...holes]);
+  }
+  if (!clipped.length) {
+    return feature;
+  }
+  return {
+    ...feature,
+    geometry:
+      clipped.length === 1
+        ? { type: "Polygon", coordinates: clipped[0] }
+        : { type: "MultiPolygon", coordinates: clipped },
+  };
+}
+
+function mergeFeatures(base, extra) {
+  return {
+    ...base,
+    geometry: {
+      type: "MultiPolygon",
+      coordinates: [...featurePolys(base), ...featurePolys(extra)],
+    },
+  };
+}
+
 function drawCover(ctx, image, x, y, width, height) {
   if (width <= 0 || height <= 0) {
     return;
@@ -211,9 +289,17 @@ function joinCountries(collection, countries, extras = []) {
   }
 
   return countries.flatMap((country) => {
-    const geoFeature = featuresByIso.get(country.iso);
+    let geoFeature = featuresByIso.get(country.iso);
     if (!geoFeature) {
       return [];
+    }
+    const morocco = featuresByIso.get("MA");
+    if (country.iso === "MA" && morocco) {
+      geoFeature = clipFeatureLat(morocco, WS_NORTH, true);
+    }
+    if (country.iso === "EH" && morocco) {
+      const occupied = clipFeatureLat(morocco, WS_NORTH, false);
+      geoFeature = mergeFeatures(geoFeature, occupied);
     }
     return [
       {
@@ -374,7 +460,8 @@ function createMap(canvas, label, rawCountries, portraits) {
     ctx.globalCompositeOperation = "source-over";
 
     for (let i = 0; i < country.sites.length; i += 1) {
-      const screen = faceScreenSize(country.sites[i], country.radiusDeg);
+      const siteScale = FACE_SITE_SCALE[country.iso]?.[i] ?? 1;
+      const screen = faceScreenSize(country.sites[i], country.radiusDeg * siteScale);
       if (!screen || screen.size < 2) {
         continue;
       }
