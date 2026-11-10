@@ -55,8 +55,7 @@ async function boot() {
     FACES_KOSOVO,
   ]);
   const assignPortraits = createMap(canvas, label, countries, {});
-  const portraits = await loadPortraits(FACES_COUNTRIES);
-  assignPortraits(portraits);
+  await loadPortraits(FACES_COUNTRIES, assignPortraits);
 }
 
 setupInfo();

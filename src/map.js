@@ -6,12 +6,10 @@ const LAND = "rgba(120, 118, 116, 0.42)";
 const BORDER = "rgba(236, 220, 192, 0.16)";
 const BORDER_HOVER = "rgba(247, 236, 214, 0.42)";
 const MAX_SCALE = 12000;
-const STAMP_SIZE = 256;
 const GRAIN_SIZE = 256;
 const GRAIN_ALPHA = 0.05;
 const FACE_FILL = 0.35;
 const FACE_SCREEN = 2.2;
-const FACE_BLEND = 0.78;
 const SIZE_CURVE = 0.25;
 const SIZE_MIN = 0.42;
 const SIZE_MAX = 1.85;
@@ -202,31 +200,6 @@ function mergeFeatures(base, extra) {
   };
 }
 
-function drawCover(ctx, image, x, y, width, height) {
-  if (width <= 0 || height <= 0) {
-    return;
-  }
-
-  const imageWidth = "width" in image ? Number(image.width) : 512;
-  const imageHeight = "height" in image ? Number(image.height) : 512;
-  const imageRatio = imageWidth / imageHeight;
-  const targetRatio = width / height;
-  let sx = 0;
-  let sy = 0;
-  let sw = imageWidth;
-  let sh = imageHeight;
-
-  if (imageRatio > targetRatio) {
-    sw = imageHeight * targetRatio;
-    sx = (imageWidth - sw) / 2;
-  } else {
-    sh = imageWidth / targetRatio;
-    sy = (imageHeight - sh) / 2;
-  }
-
-  ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
-}
-
 function referenceFace(countries, largestPop) {
   const reference =
     countries.find((country) => country.iso === "IN") ||
@@ -339,14 +312,6 @@ function createMap(canvas, label, rawCountries, portraits) {
   let transform = zoomIdentity;
   let hovered;
   let frame = 0;
-  const stamp = document.createElement("canvas");
-  stamp.width = STAMP_SIZE;
-  stamp.height = STAMP_SIZE;
-  const stampContext = stamp.getContext("2d");
-  if (!stampContext) {
-    throw new Error("Canvas is not available");
-  }
-  const stampCtx = stampContext;
   const grain = createGrain();
   const grainPattern = ctx.createPattern(grain, "repeat");
 
@@ -393,26 +358,6 @@ function createMap(canvas, label, rawCountries, portraits) {
     ]);
     transform = zoomIdentity;
     canvasSel.call(zoomBehavior).call(zoomBehavior.transform, zoomIdentity);
-  }
-
-  function stampPortrait(image) {
-    const size = stamp.width;
-    const mid = size / 2;
-    stampCtx.setTransform(1, 0, 0, 1, 0, 0);
-    stampCtx.globalCompositeOperation = "source-over";
-    stampCtx.clearRect(0, 0, size, size);
-    stampCtx.imageSmoothingEnabled = true;
-    stampCtx.imageSmoothingQuality = "high";
-    drawCover(stampCtx, image, 0, 0, size, size);
-    stampCtx.globalCompositeOperation = "destination-in";
-    const fade = stampCtx.createRadialGradient(mid, mid, 0, mid, mid, mid);
-    fade.addColorStop(0, `rgba(0,0,0,${FACE_BLEND})`);
-    fade.addColorStop(0.58, `rgba(0,0,0,${FACE_BLEND})`);
-    fade.addColorStop(0.82, "rgba(0,0,0,0.32)");
-    fade.addColorStop(1, "rgba(0,0,0,0)");
-    stampCtx.fillStyle = fade;
-    stampCtx.fillRect(0, 0, size, size);
-    stampCtx.globalCompositeOperation = "source-over";
   }
 
   function faceScreenSize(site, radiusDeg) {
@@ -471,12 +416,13 @@ function createMap(canvas, label, rawCountries, portraits) {
         continue;
       }
 
-      const image = country.faces[i];
+      const record = country.faces[i];
+      const image = portraitCanvas(record);
       if (!image) {
         continue;
       }
-      stampPortrait(image);
-      ctx.drawImage(stamp, x, y, screen.size, screen.size);
+      ensurePortraitTier(record, screen.size * dpr, requestDraw);
+      ctx.drawImage(image, x, y, screen.size, screen.size);
     }
 
     ctx.restore();
@@ -509,6 +455,7 @@ function createMap(canvas, label, rawCountries, portraits) {
   }
 
   function draw() {
+    beginPortraitFrame();
     applyView();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     paintOcean();
@@ -607,13 +554,14 @@ function createMap(canvas, label, rawCountries, portraits) {
   window.addEventListener("resize", onResize);
 
   return function assignPortraits(library) {
+    const hoveredIso = hovered?.iso;
     const next = seedCountries(rawCountries, library);
     next.sort((a, b) => b.area - a.area);
     countries.length = 0;
     for (const country of next) {
       countries.push(country);
     }
-    hovered = undefined;
+    hovered = hoveredIso ? countries.find((country) => country.iso === hoveredIso) : undefined;
     requestDraw();
   };
 }

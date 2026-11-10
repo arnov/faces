@@ -1,6 +1,12 @@
 const MIN_FACES = 2;
 const MAX_FACES = 50;
 const FACE_CURVE = 0.65;
+const PORTRAIT_SM = 128;
+const PORTRAIT_MD = 512;
+const PORTRAIT_FULL = 1024;
+const FACE_BLEND = 0.78;
+const PREVIEW_LIMIT = 8;
+const UPGRADE_LIMIT = 3;
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -9,7 +15,7 @@ function loadImage(src) {
       image.onload = null;
       image.onerror = null;
       reject(new Error(`Timed out ${src}`));
-    }, 2500);
+    }, 8000);
     image.decoding = "async";
     image.onload = () => {
       window.clearTimeout(timer);
@@ -89,6 +95,16 @@ function gradePortrait(image, size = 512) {
   ctx.drawImage(gradeGrain, 0, 0, size, size);
   ctx.globalAlpha = 1;
 
+  const fade = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
+  fade.addColorStop(0, `rgba(0,0,0,${FACE_BLEND})`);
+  fade.addColorStop(0.58, `rgba(0,0,0,${FACE_BLEND})`);
+  fade.addColorStop(0.82, "rgba(0,0,0,0.32)");
+  fade.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalCompositeOperation = "source-over";
+
   return canvas;
 }
 
@@ -108,55 +124,198 @@ function genderCounts(total) {
   return { m: total - women, f: women };
 }
 
-function numberedPaths(iso, gender, count) {
-  const paths = [];
-  for (let i = 1; i <= count; i += 1) {
-    const suffix = i === 1 ? "" : String(i);
-    paths.push(`portraits/${iso}-${gender}${suffix}.jpg`);
-  }
-  return paths;
+function portraitName(iso, gender, index) {
+  const suffix = index === 1 ? "" : String(index);
+  return `${iso}-${gender}${suffix}.jpg`;
 }
 
-async function loadImageOptional(src) {
-  try {
-    return await loadImage(src);
-  } catch {
-    return null;
+function portraitSrc(tier, iso, gender, index) {
+  const name = portraitName(iso, gender, index);
+  if (tier === "sm") {
+    return `portraits/sm/${name}`;
   }
+  if (tier === "md") {
+    return `portraits/md/${name}`;
+  }
+  return `portraits/${name}`;
+}
+
+function createLimiter(limit) {
+  let active = 0;
+  const queue = [];
+
+  function pump() {
+    while (active < limit && queue.length) {
+      const run = queue.shift();
+      active += 1;
+      Promise.resolve()
+        .then(run)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  }
+
+  return function limitRun(task) {
+    return new Promise((resolve, reject) => {
+      queue.push(() => task().then(resolve, reject));
+      pump();
+    });
+  };
+}
+
+const previewLoad = createLimiter(PREVIEW_LIMIT);
+
+async function loadImageOptional(src) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await previewLoad(() => loadImage(src));
+    } catch (error) {
+      const timedOut = String(error?.message || "").includes("Timed out");
+      if (!timedOut || attempt === 1) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function createPortrait(iso, gender, index, image) {
+  return {
+    sm: gradePortrait(image, PORTRAIT_SM),
+    md: null,
+    full: null,
+    mdSrc: portraitSrc("md", iso, gender, index),
+    fullSrc: portraitSrc("full", iso, gender, index),
+  };
+}
+
+function portraitCanvas(record) {
+  if (!record) {
+    return undefined;
+  }
+  return record.full || record.md || record.sm;
+}
+
+const upgradeQueue = [];
+const upgradeStarted = new Set();
+let upgradeActive = 0;
+let frameTiers = new Map();
+let tierBatch = null;
+let tierTimer = 0;
+
+function pumpUpgrades() {
+  while (upgradeActive < UPGRADE_LIMIT && upgradeQueue.length) {
+    const job = upgradeQueue.shift();
+    upgradeActive += 1;
+    loadImage(job.src)
+      .then((image) => {
+        const size = job.tier === "full" ? PORTRAIT_FULL : PORTRAIT_MD;
+        job.record[job.tier] = gradePortrait(image, size);
+        job.onReady();
+      })
+      .catch(() => {})
+      .finally(() => {
+        upgradeActive -= 1;
+        pumpUpgrades();
+      });
+  }
+}
+
+function queuePortrait(record, tier, onReady) {
+  if (tier === "full") {
+    for (let i = upgradeQueue.length - 1; i >= 0; i -= 1) {
+      const job = upgradeQueue[i];
+      if (job.record === record && job.tier === "md") {
+        upgradeQueue.splice(i, 1);
+        upgradeStarted.delete(job.src);
+      }
+    }
+  }
+  if (record[tier]) {
+    return;
+  }
+  const src = tier === "full" ? record.fullSrc : record.mdSrc;
+  if (upgradeStarted.has(src)) {
+    return;
+  }
+  upgradeStarted.add(src);
+  upgradeQueue.push({ record, tier, src, onReady });
+  pumpUpgrades();
+}
+
+function beginPortraitFrame() {
+  frameTiers = new Map();
+  tierBatch = frameTiers;
+}
+
+function ensurePortraitTier(record, devicePixels, onReady) {
+  if (!record || !onReady) {
+    return;
+  }
+  let tier = null;
+  if (devicePixels > PORTRAIT_MD) {
+    tier = "full";
+  } else if (devicePixels > PORTRAIT_SM) {
+    tier = "md";
+  }
+  if (!tier || record[tier]) {
+    return;
+  }
+  frameTiers.set(record.fullSrc, { record, tier, onReady });
+  const batch = frameTiers;
+  window.clearTimeout(tierTimer);
+  tierTimer = window.setTimeout(() => {
+    if (batch !== tierBatch) {
+      return;
+    }
+    tierBatch = null;
+    for (const job of batch.values()) {
+      queuePortrait(job.record, job.tier, job.onReady);
+    }
+  }, 120);
 }
 
 async function loadGender(iso, gender, count) {
-  const images = [];
+  const records = [];
   for (let i = 1; i <= count; i += 1) {
-    const suffix = i === 1 ? "" : String(i);
-    const image = await loadImageOptional(`portraits/${iso}-${gender}${suffix}.jpg`);
+    const image = await loadImageOptional(portraitSrc("sm", iso, gender, i));
     if (!image) {
       break;
     }
-    images.push(image);
+    records.push(createPortrait(iso, gender, i, image));
   }
-  return images;
+  return records;
 }
 
-async function loadPortraits(countries) {
+async function loadPortraits(countries, onCountry) {
   const largest = Math.max(0, ...countries.map((country) => country.population ?? 0));
   const library = {};
+  const ordered = [...countries].sort(
+    (a, b) => (b.population ?? 0) - (a.population ?? 0),
+  );
+  let next = 0;
 
-  await Promise.all(
-    countries.map(async (country) => {
+  async function worker() {
+    while (next < ordered.length) {
+      const country = ordered[next];
+      next += 1;
       const total = faceCount(country.population ?? 0, largest);
       const counts = genderCounts(total);
       const [men, women] = await Promise.all([
         loadGender(country.iso, "m", counts.m),
         loadGender(country.iso, "f", counts.f),
       ]);
-      library[country.iso] = {
-        m: men.map((image) => gradePortrait(image)),
-        f: women.map((image) => gradePortrait(image)),
-      };
-    }),
-  );
+      library[country.iso] = { m: men, f: women };
+      if (onCountry) {
+        onCountry(library);
+      }
+    }
+  }
 
+  const workers = Math.min(PREVIEW_LIMIT, ordered.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
   return library;
 }
 
