@@ -303,9 +303,10 @@ async function loadPortraits(countries, onCountry) {
       next += 1;
       const total = faceCount(country.population ?? 0, largest);
       const counts = genderCounts(total);
+      const available = FACES_PORTRAITS[country.iso] ?? { m: 0, f: 0 };
       const [men, women] = await Promise.all([
-        loadGender(country.iso, "m", counts.m),
-        loadGender(country.iso, "f", counts.f),
+        loadGender(country.iso, "m", Math.min(counts.m, available.m)),
+        loadGender(country.iso, "f", Math.min(counts.f, available.f)),
       ]);
       library[country.iso] = { m: men, f: women };
       if (onCountry) {
