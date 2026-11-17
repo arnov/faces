@@ -245,6 +245,33 @@ function seedCountries(countries, portraits) {
   });
 }
 
+const CRIMEA_BOX = [32, 44, 37, 46.3];
+
+function inCrimea(polygon) {
+  const [x0, y0, x1, y1] = CRIMEA_BOX;
+  return polygon[0].every(([lon, lat]) => lon >= x0 && lon <= x1 && lat >= y0 && lat <= y1);
+}
+
+// Natural Earth puts Crimea inside Russia. Split it out as plain land: drawn,
+// but without faces and without a name on hover.
+function splitCrimea(russia) {
+  const polys = featurePolys(russia);
+  const crimea = polys.filter(inCrimea);
+  if (!crimea.length) {
+    return { russia, crimea: null };
+  }
+  const rest = polys.filter((poly) => !inCrimea(poly));
+  return {
+    russia: { ...russia, geometry: { type: "MultiPolygon", coordinates: rest } },
+    crimea: {
+      type: "Feature",
+      id: "crimea",
+      properties: {},
+      geometry: { type: "MultiPolygon", coordinates: crimea },
+    },
+  };
+}
+
 function joinCountries(collection, countries, extras = []) {
   const toIso = numericToIso();
   const byIso = new Map(countries.map((country) => [country.iso, country]));
@@ -261,7 +288,14 @@ function joinCountries(collection, countries, extras = []) {
     }
   }
 
-  return countries.flatMap((country) => {
+  let crimea = null;
+  if (featuresByIso.has("RU")) {
+    const split = splitCrimea(featuresByIso.get("RU"));
+    featuresByIso.set("RU", split.russia);
+    crimea = split.crimea;
+  }
+
+  const joined = countries.flatMap((country) => {
     let geoFeature = featuresByIso.get(country.iso);
     if (!geoFeature) {
       return [];
@@ -284,6 +318,18 @@ function joinCountries(collection, countries, extras = []) {
       },
     ];
   });
+
+  if (crimea) {
+    joined.push({
+      iso: "crimea",
+      name: "",
+      population: 0,
+      feature: crimea,
+      area: geoArea(crimea),
+      neutral: true,
+    });
+  }
+  return joined;
 }
 
 function createMap(canvas, label, rawCountries, portraits) {
@@ -295,7 +341,11 @@ function createMap(canvas, label, rawCountries, portraits) {
   const countries = seedCountries(rawCountries, portraits);
 
   const projection = geoNaturalEarth1();
-  const path = geoPath(projection, ctx);
+  // Zoom and pan only scale and translate the projection, so every shape is
+  // projected once at the base view and then drawn through the canvas transform.
+  const baseProjection = geoNaturalEarth1();
+  let shapes = new Map();
+  let faceLayouts = new WeakMap();
   const canvasSel = select(canvas);
   const zoomBehavior = d3zoom()
     .scaleExtent([1, MAX_SCALE])
@@ -342,15 +392,16 @@ function createMap(canvas, label, rawCountries, portraits) {
     canvas.height = Math.round(nextHeight * dpr);
 
     const pad = Math.min(width, height) * 0.06;
-    projection.fitExtent(
+    baseProjection.fitExtent(
       [
         [pad, pad],
         [width - pad, height - pad],
       ],
       { type: "Sphere" },
     );
-    baseScale = projection.scale();
-    baseTranslate = projection.translate();
+    baseScale = baseProjection.scale();
+    baseTranslate = baseProjection.translate();
+    buildShapes();
 
     zoomBehavior.translateExtent([
       [-width * 0.4, -height * 0.4],
@@ -360,12 +411,26 @@ function createMap(canvas, label, rawCountries, portraits) {
     canvasSel.call(zoomBehavior).call(zoomBehavior.transform, zoomIdentity);
   }
 
-  function faceScreenSize(site, radiusDeg) {
-    const origin = projection(site);
+  function buildShapes() {
+    const next = new Map();
+    for (const country of rawCountries) {
+      const shape = new Path2D();
+      geoPath(baseProjection, shape)(country.feature);
+      next.set(country.iso, {
+        path: shape,
+        bounds: geoPath(baseProjection).bounds(country.feature),
+      });
+    }
+    shapes = next;
+    faceLayouts = new WeakMap();
+  }
+
+  function baseFaceLayout(site, radiusDeg) {
+    const origin = baseProjection(site);
     if (!origin) {
       return null;
     }
-    const east = projection([
+    const east = baseProjection([
       site[0] + radiusDeg / Math.max(0.2, Math.cos((site[1] * Math.PI) / 180)),
       site[1],
     ]);
@@ -373,16 +438,31 @@ function createMap(canvas, label, rawCountries, portraits) {
       return null;
     }
     const radius = Math.hypot(east[0] - origin[0], east[1] - origin[1]);
-    const size = radius * 2 * FACE_SCREEN;
-    return { origin, size: Math.max(6, size) };
+    return { origin, size: radius * 2 * FACE_SCREEN };
+  }
+
+  function countryFaceLayouts(country) {
+    let layouts = faceLayouts.get(country);
+    if (!layouts) {
+      layouts = country.sites.map((site, i) => {
+        const siteScale = FACE_SITE_SCALE[country.iso]?.[i] ?? 1;
+        return baseFaceLayout(site, country.radiusDeg * siteScale);
+      });
+      faceLayouts.set(country, layouts);
+    }
+    return layouts;
   }
 
   function paintCountry(country, active) {
-    const bounds = path.bounds(country.feature);
-    const x0 = bounds[0][0];
-    const y0 = bounds[0][1];
-    const bw = bounds[1][0] - x0;
-    const bh = bounds[1][1] - y0;
+    const shape = shapes.get(country.iso);
+    if (!shape) {
+      return;
+    }
+    const { k, x: tx, y: ty } = transform;
+    const x0 = shape.bounds[0][0] * k + tx;
+    const y0 = shape.bounds[0][1] * k + ty;
+    const bw = (shape.bounds[1][0] - shape.bounds[0][0]) * k;
+    const bh = (shape.bounds[1][1] - shape.bounds[0][1]) * k;
     if (bw <= 0 || bh <= 0) {
       return;
     }
@@ -393,26 +473,27 @@ function createMap(canvas, label, rawCountries, portraits) {
       return;
     }
 
-    ctx.beginPath();
-    path(country.feature);
+    const screenPath = new Path2D();
+    screenPath.addPath(shape.path, new DOMMatrix([k, 0, 0, k, tx, ty]));
     ctx.fillStyle = LAND;
-    ctx.fill();
+    ctx.fill(screenPath);
 
     ctx.save();
-    ctx.clip();
+    ctx.clip(screenPath);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.globalCompositeOperation = "source-over";
 
-    for (let i = 0; i < country.sites.length; i += 1) {
-      const siteScale = FACE_SITE_SCALE[country.iso]?.[i] ?? 1;
-      const screen = faceScreenSize(country.sites[i], country.radiusDeg * siteScale);
-      if (!screen || screen.size < 2) {
+    const layouts = countryFaceLayouts(country);
+    for (let i = 0; i < layouts.length; i += 1) {
+      const base = layouts[i];
+      if (!base) {
         continue;
       }
-      const x = screen.origin[0] - screen.size / 2;
-      const y = screen.origin[1] - screen.size / 2;
-      if (x + screen.size < 0 || y + screen.size < 0 || x > width || y > height) {
+      const size = Math.max(6, base.size * k);
+      const x = base.origin[0] * k + tx - size / 2;
+      const y = base.origin[1] * k + ty - size / 2;
+      if (x + size < 0 || y + size < 0 || x > width || y > height) {
         continue;
       }
 
@@ -421,18 +502,16 @@ function createMap(canvas, label, rawCountries, portraits) {
       if (!image) {
         continue;
       }
-      ensurePortraitTier(record, screen.size * dpr, requestDraw);
-      ctx.drawImage(image, x, y, screen.size, screen.size);
+      ensurePortraitTier(record, size * dpr, requestDraw);
+      ctx.drawImage(image, x, y, size, size);
     }
 
     ctx.restore();
 
-    ctx.beginPath();
-    path(country.feature);
     ctx.lineJoin = "round";
     ctx.lineWidth = active ? 0.85 : 0.55;
     ctx.strokeStyle = active ? BORDER_HOVER : BORDER;
-    ctx.stroke();
+    ctx.stroke(screenPath);
   }
 
   function paintOcean() {
@@ -481,8 +560,18 @@ function createMap(canvas, label, rawCountries, portraits) {
 
     for (let i = countries.length - 1; i >= 0; i -= 1) {
       const country = countries[i];
+      const bounds = shapes.get(country.iso)?.bounds;
+      if (
+        !bounds ||
+        mx < bounds[0][0] * transform.k + transform.x ||
+        mx > bounds[1][0] * transform.k + transform.x ||
+        my < bounds[0][1] * transform.k + transform.y ||
+        my > bounds[1][1] * transform.k + transform.y
+      ) {
+        continue;
+      }
       if (geoContains(country.feature, lonlat)) {
-        return country;
+        return country.neutral ? undefined : country;
       }
     }
 
@@ -502,19 +591,23 @@ function createMap(canvas, label, rawCountries, portraits) {
     }
 
     const pad = 16;
-    const offsetX = 16;
-    const offsetY = -18;
     label.hidden = false;
     label.textContent = name;
     const box = label.getBoundingClientRect();
-    const left = Math.min(
-      window.innerWidth - box.width - pad,
-      Math.max(pad, event.clientX + offsetX),
-    );
-    const top = Math.min(
-      window.innerHeight - box.height - pad,
-      Math.max(pad, event.clientY + offsetY),
-    );
+    let x = event.clientX + 16;
+    let y = event.clientY - 18;
+    if (event.pointerType === "touch") {
+      // Keep the label clear of the fingertip: centered above the touch point,
+      // or below it when there is no room above.
+      const clearance = 64;
+      x = event.clientX - box.width / 2;
+      y = event.clientY - clearance - box.height;
+      if (y < pad) {
+        y = event.clientY + clearance;
+      }
+    }
+    const left = Math.min(window.innerWidth - box.width - pad, Math.max(pad, x));
+    const top = Math.min(window.innerHeight - box.height - pad, Math.max(pad, y));
     label.style.left = `${left}px`;
     label.style.top = `${top}px`;
     label.classList.add("is-visible");
@@ -524,7 +617,7 @@ function createMap(canvas, label, rawCountries, portraits) {
     const next = pick(event);
     if (next !== hovered) {
       hovered = next;
-      draw();
+      requestDraw();
     }
     placeLabel(event, next?.name);
   }
@@ -532,7 +625,7 @@ function createMap(canvas, label, rawCountries, portraits) {
   function onPointerLeave() {
     hovered = undefined;
     hideLabel();
-    draw();
+    requestDraw();
   }
 
   function onResize() {
